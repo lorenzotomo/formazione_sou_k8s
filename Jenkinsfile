@@ -19,10 +19,14 @@ pipeline {
         stage('Determine Docker Tag') {
             steps {
                 script {
-                    // Ottiene nome branch, tag e SHA commit
                     def gitBranch = sh(script: "git rev-parse --abbrev-ref HEAD", returnStdout: true).trim()
                     def gitTag = sh(script: "git describe --tags --exact-match || true", returnStdout: true).trim()
                     def gitCommit = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+
+                    if (gitBranch == "HEAD") {
+                        echo "Jenkins in detached HEAD, recupero branch da GIT_BRANCH env..."
+                        gitBranch = env.GIT_BRANCH?.replaceFirst(/^origin\//, '') ?: "unknown"
+                    }
 
                     def imageTag = ""
 
@@ -36,9 +40,7 @@ pipeline {
                         imageTag = "${gitBranch}-${gitCommit}"
                     }
 
-                    // Imposta la variabile d'ambiente Jenkins
                     env.IMAGE_TAG = imageTag
-
                     echo "Docker tag scelto: ${env.IMAGE_TAG}"
                 }
             }
