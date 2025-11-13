@@ -2,9 +2,13 @@ pipeline {
     agent any
 
     environment {
-        DOCKERHUB_USER = 'lorenzotomo'             
-        IMAGE_NAME = 'flask-hello-world'  
-        REGISTRY = 'docker.io'                      
+        DOCKERHUB_USER = 'lorenzotomo'
+        IMAGE_NAME = 'flask-hello-world'
+        REGISTRY = 'docker.io'
+        KUBE_NAMESPACE = 'formazione-sou'
+        HELM_RELEASE = 'flask-app'
+        CHART_PATH = 'charts/flask-app' 
+        KUBECONFIG_ID = 'minikube-secret' 
     }
 
     stages {
@@ -19,12 +23,13 @@ pipeline {
         stage('Determine Docker Tag') {
             steps {
                 script {
+                    echo "Determinazione tag Docker..."
                     def gitBranch = sh(script: "git rev-parse --abbrev-ref HEAD", returnStdout: true).trim()
                     def gitTag = sh(script: "git describe --tags --exact-match || true", returnStdout: true).trim()
                     def gitCommit = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
 
+                    // Gestione del caso 'detached HEAD'
                     if (gitBranch == "HEAD") {
-                        echo "Jenkins in detached HEAD, recupero branch da GIT_BRANCH env..."
                         gitBranch = env.GIT_BRANCH?.replaceFirst(/^origin\//, '') ?: "unknown"
                     }
 
@@ -50,7 +55,6 @@ pipeline {
             steps {
                 echo "Verifica disponibilità Docker..."
                 sh 'docker --version'
-                sh 'docker info || true'
             }
         }
 
@@ -64,6 +68,7 @@ pipeline {
         stage('Login to Docker Hub') {
             steps {
                 echo "Login a Docker Hub..."
+                // Assicurati di avere le credenziali 'dockerhub-credentials' salvate su Jenkins
                 withCredentials([usernamePassword(credentialsId: 'dockerhub-credentials', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
                     sh "echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin ${REGISTRY}"
                 }
@@ -76,6 +81,27 @@ pipeline {
                 sh "docker push ${REGISTRY}/${DOCKERHUB_USER}/${IMAGE_NAME}:${IMAGE_TAG}"
             }
         }
+
+        stage('Deploy to Minikube (Helm)') {
+            steps {
+                echo "Deploy Helm su namespace '${KUBE_NAMESPACE}'..."
+                
+                withCredentials([file(credentialsId: KUBECONFIG_ID, variable: 'KUBECONFIG')]) {
+                    script {
+                        sh 'kubectl get nodes'
+
+                        sh """
+                            helm upgrade --install ${HELM_RELEASE} ${CHART_PATH} \
+                              --namespace ${KUBE_NAMESPACE} \
+                              --create-namespace \
+                              --set image.repository=${REGISTRY}/${DOCKERHUB_USER}/${IMAGE_NAME} \
+                              --set image.tag=${IMAGE_TAG} \
+                              --wait
+                        """
+                    }
+                }
+            }
+        }
     }
 
     post {
@@ -85,4 +111,3 @@ pipeline {
         }
     }
 }
-
