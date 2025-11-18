@@ -28,7 +28,6 @@ pipeline {
                     def gitTag = sh(script: "git describe --tags --exact-match || true", returnStdout: true).trim()
                     def gitCommit = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
 
-                    // Gestione del caso 'detached HEAD'
                     if (gitBranch == "HEAD") {
                         gitBranch = env.GIT_BRANCH?.replaceFirst(/^origin\//, '') ?: "unknown"
                     }
@@ -68,7 +67,6 @@ pipeline {
         stage('Login to Docker Hub') {
             steps {
                 echo "Login a Docker Hub..."
-                // Assicurati di avere le credenziali 'dockerhub-credentials' salvate su Jenkins
                 withCredentials([usernamePassword(credentialsId: 'dockerhub-credentials', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
                     sh "echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin ${REGISTRY}"
                 }
