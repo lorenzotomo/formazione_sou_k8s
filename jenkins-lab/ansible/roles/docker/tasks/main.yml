@@ -1,0 +1,47 @@
+- name: Install Python dependencies for Ansible modules
+  ansible.builtin.package:
+    name:
+      - python3-pip
+    state: present
+
+- name: Install required Python packages (requests & docker)
+  ansible.builtin.pip:
+    name:
+      - requests
+      - docker
+
+- name: Install required packages
+  become: yes
+  ansible.builtin.yum:
+    name:
+      - yum-utils
+      - device-mapper-persistent-data
+      - lvm2
+    state: present
+
+- name: Add Docker repo
+  become: yes
+  ansible.builtin.get_url:
+    url: https://download.docker.com/linux/centos/docker-ce.repo
+    dest: /etc/yum.repos.d/docker-ce.repo
+
+- name: Install Docker
+  become: yes
+  ansible.builtin.yum:
+    name: docker-ce
+    state: present
+
+- name: Enable and start Docker
+  become: yes
+  ansible.builtin.service:
+    name: docker
+    state: started
+    enabled: yes
+
+- name: Add vagrant user to docker group
+  become: yes
+  ansible.builtin.user:
+    name: vagrant
+    groups: docker
+    append: yes
+

@@ -1,0 +1,61 @@
+- name: Ensure Jenkins agent directory exists on new disk
+  become: yes
+  ansible.builtin.file:
+    path: /data/jenkins_agent
+    state: directory
+    owner: 1000
+    group: 1000
+    mode: '0755'
+
+- name: Remove old Jenkins agent container if exists
+  become: yes
+  ansible.builtin.shell: |
+    if [ "$(docker ps -a -q -f name=jenkins-agent)" ]; then
+      docker rm -f jenkins-agent
+    fi
+  args:
+    executable: /bin/bash
+
+- name: Run Jenkins Agent container using Docker CLI
+  become: yes
+  ansible.builtin.shell: |
+    docker run -d \
+      --name jenkins-agent \
+      --network jenkins_net \
+      --group-add $(getent group docker | cut -d: -f3) \
+      -v /var/run/docker.sock:/var/run/docker.sock \
+      -v /usr/bin/docker:/usr/bin/docker \
+      -v /data/jenkins_agent:/home/jenkins/agent \
+      -e JENKINS_URL=http://jenkins-master:8080 \
+      -e JENKINS_AGENT_NAME=agent1 \
+      -e JENKINS_SECRET=107889f5141717947335ea6e64d3ef1dccb4145a8c386b36f4167c0e919f9a2a \
+      -e JENKINS_WEB_SOCKET=true \
+      -e JENKINS_AGENT_WORKDIR=/home/jenkins/agent \
+      jenkins/inbound-agent:latest
+
+- name: Wait for Jenkins Agent container to start
+  become: yes
+  retries: 5
+  delay: 5
+  ansible.builtin.shell: docker inspect -f '{{'{{'}} .State.Running {{'}}'}}' jenkins-agent
+  register: agent_status
+  until: agent_status.stdout == "true"
+  args:
+    executable: /bin/bash
+
+- name: Run Jenkins agent JAR inside the container (in background)
+  become: yes
+  ansible.builtin.shell: |
+    docker exec -d jenkins-agent bash -c '
+      cd /home/jenkins/agent && \
+      curl -sO http://jenkins-master:8080/jnlpJars/agent.jar && \
+      nohup java -jar agent.jar \
+        -url http://jenkins-master:8080/ \
+        -secret 107889f5141717947335ea6e64d3ef1dccb4145a8c386b36f4167c0e919f9a2a \
+        -name agent1 \
+        -webSocket \
+        -workDir "/home/jenkins/agent" > agent.log 2>&1 &
+    '
+  args:
+    executable: /bin/bash
+

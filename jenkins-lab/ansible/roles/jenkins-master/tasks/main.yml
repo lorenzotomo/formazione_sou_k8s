@@ -1,0 +1,13 @@
+- name: Run Jenkins Master container using Docker CLI
+  become: yes
+  ansible.builtin.shell: |
+    docker ps --filter "name=jenkins-master" --format '{{'{{'}}.Names{{'}}'}}' | grep -w jenkins-master \
+      || docker run -d \
+      --name jenkins-master \
+      --network jenkins_net \
+      -p 8080:8080 -p 50000:50000 \
+      -v jenkins_home:/var/jenkins_home \
+      jenkins/jenkins:lts
+  args:
+    executable: /bin/bash
+

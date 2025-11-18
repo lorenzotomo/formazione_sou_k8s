@@ -1,0 +1,22 @@
+- name: Ensure Docker is installed and running
+  become: yes
+  ansible.builtin.service:
+    name: docker
+    state: started
+    enabled: yes
+
+- name: Check if Docker network already exists
+  become: yes
+  ansible.builtin.shell: |
+    docker network ls --format '{{"{{"}} .Name {{"}}"}}' | grep -w jenkins_net
+  register: network_exists
+  ignore_errors: yes
+
+- name: Fallback — Create Docker network for Jenkins using CLI
+  become: yes
+  ansible.builtin.shell: |
+    docker network create --driver bridge --subnet 172.28.0.0/16 jenkins_net
+  args:
+    executable: /bin/bash
+  when: network_exists.rc != 0
+
