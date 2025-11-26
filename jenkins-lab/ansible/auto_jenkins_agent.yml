@@ -1,0 +1,135 @@
+- name: Configurazione Agent Jenkins sulla VM 
+  hosts: all
+  become: yes
+  vars:
+    jenkins_api_url: "http://localhost:8080"
+    jenkins_user: "admin"
+    jenkins_pass: "7eb0c03aff1c46f3860c98b5b1f43ee4"
+    
+    # Configurazione Nodo
+    agent_name: "agent2"
+    agent_workdir: "/home/jenkins/agent"
+    
+    # JSON per la creazione del nodo
+    agent_config:
+      name: "{{ agent_name }}"
+      nodeDescription: "Ansible Agent"
+      numExecutors: 1
+      remoteFS: "{{ agent_workdir }}"
+      labelString: "rocky-linux-docker"
+      mode: "EXCLUSIVE"
+      retentionStrategy:
+        stapler-class: "hudson.slaves.RetentionStrategy$Always"
+      launcher:
+        stapler-class: "hudson.slaves.JNLPLauncher"
+        tunnel: ""
+        vmargs: ""
+
+  tasks:
+    - name: Installa pip per Python 3
+      dnf:
+        name: python3-pip
+        state: present
+
+    - name: Installa libreria Requests (per le chiamate API di Ansible)
+      pip:
+        name: requests
+        state: present
+
+    # 1. PREPARAZIONE FILESYSTEM
+    - name: Assicura che la directory dell'agent esista su nuovo disco
+      file:
+        path: /data/jenkins_agent
+        state: directory
+        owner: 1000
+        group: 1000
+        mode: '0755'
+
+    # 2. AUTOMAZIONE API JENKINS (Crumb -> Token -> Create -> Secret)
+    - name: Ottengo il Crumb CSRF
+      ansible.builtin.uri:
+        url: "{{ jenkins_api_url }}/crumbIssuer/api/json"
+        user: "{{ jenkins_user }}"
+        password: "{{ jenkins_pass }}"
+        force_basic_auth: yes
+        return_content: yes
+        status_code: 200
+      register: crumb_response
+
+    - name: Genero API Token
+      ansible.builtin.uri:
+        url: "{{ jenkins_api_url }}/me/descriptorByName/jenkins.security.ApiTokenProperty/generateNewToken"
+        method: POST
+        user: "{{ jenkins_user }}"
+        password: "{{ jenkins_pass }}"
+        force_basic_auth: yes
+        headers:
+          Jenkins-Crumb: "{{ crumb_response.json.crumb }}"
+          Cookie: "{{ crumb_response.cookies_string }}"
+        body_format: form-urlencoded
+        body:
+          newTokenName: "token-for-vm-{{ ansible_date_time.epoch }}"
+        return_content: yes
+      register: token_response
+
+    - name: Salva API Token
+      set_fact:
+        jenkins_api_token: "{{ token_response.json.data.tokenValue }}"
+
+    - name: Crea Nodo Agent su Jenkins
+      ansible.builtin.uri:
+        url: "{{ jenkins_api_url }}/computer/doCreateItem?name={{ agent_name }}&type=hudson.slaves.DumbSlave"
+        method: POST
+        user: "{{ jenkins_user }}"
+        password: "{{ jenkins_api_token }}"
+        force_basic_auth: yes
+        headers:
+          Jenkins-Crumb: "{{ crumb_response.json.crumb }}"
+          Cookie: "{{ crumb_response.cookies_string }}"
+          Content-Type: "application/x-www-form-urlencoded"
+        body_format: form-urlencoded
+        body:
+          json: "{{ agent_config | to_json }}"
+        status_code: [200, 302]
+        return_content: yes
+      ignore_errors: true
+
+    - name: Recupera Secret JNLP
+      ansible.builtin.uri:
+        url: "{{ jenkins_api_url }}/computer/{{ agent_name }}/jenkins-agent.jnlp"
+        user: "{{ jenkins_user }}"
+        password: "{{ jenkins_api_token }}"
+        force_basic_auth: yes
+        return_content: yes
+        headers:
+          Cookie: "{{ crumb_response.cookies_string }}"
+      register: jnlp_response
+
+    - name: Estrai Secret
+      set_fact:
+        agent_secret: "{{ jnlp_response.content | regex_search('<application-desc><argument>([a-f0-9]+)</argument>', '\\1') | first }}"
+
+    # 3. AVVIO CONTAINER
+    - name: Rimuovi vecchio container se esiste
+      ansible.builtin.shell: |
+        if [ "$(docker ps -aq -f name=jenkins-agent2)" ]; then
+            docker rm -f jenkins-agent2
+        fi
+      ignore_errors: true
+
+    - name: Avvia Jenkins Agent (Docker CLI)
+      ansible.builtin.shell: |
+        docker run -d \
+          --name jenkins-agent2 \
+          --network jenkins_net \
+          --restart always \
+          --group-add $(getent group docker | cut -d: -f3) \
+          -v /var/run/docker.sock:/var/run/docker.sock \
+          -v /usr/bin/docker:/usr/bin/docker \
+          -v /data/jenkins_agent:/home/jenkins/agent \
+          -e JENKINS_URL=http://jenkins-master:8080 \
+          -e JENKINS_AGENT_NAME="{{ agent_name }}" \
+          -e JENKINS_SECRET="{{ agent_secret }}" \
+          -e JENKINS_WEB_SOCKET=true \
+          -e JENKINS_AGENT_WORKDIR="/home/jenkins/agent" \
+          jenkins/inbound-agent:latest
